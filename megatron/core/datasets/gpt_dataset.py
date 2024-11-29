@@ -694,7 +694,7 @@ class MockGPTLowLevelDataset:
 
     seed: int = 0
     size: int = 100000
-    max_sequence_length: int = 4096
+    max_sequence_length: int = 100
 
     def __init__(self, tokenizer: MegatronTokenizer) -> None:
         self.tokenizer = tokenizer
