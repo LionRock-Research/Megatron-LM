@@ -8,8 +8,6 @@ try:
     import transformers
 except ImportError:
     raise ImportError("The 'transformers' package is not installed.")
-import gc
-import shutil
 from tqdm import tqdm
 import types
 
@@ -19,11 +17,7 @@ def add_arguments(parser):
 
     # TODO(jbarker): Need assertion to make sure *exactly* one of these is used
     parser.add_argument('--model-size', type=str, required=True,
-                        choices=['llama2-7B', 'llama2-13B', 'llama2-70B', 'llama2-7Bf', 'llama2-13Bf', 'llama2-70Bf', 'llama3-8B', 'llama3-70B', 'llama3-8Bf', 'llama3-70Bf', 'mistral-7B', 'mistral-7Bf', 'yi-34B', 'qwen2.5-7B', 'qwen2.5-72B', 'qwen2.5-7Bf', 'qwen2.5-72Bf', 'emu3-gen'],
-                        help='Model size can be `llama2-7B`, `llama2-13B`, `llama2-70B`, `llama3-8B`, `llama3-70B`, `mistral-7B`, `qwen2.5-7B`, `qwen2.5-72B` (for pretrained models), '
-                        'and `llama2-7Bf`, `llama2-13Bf`, `llama2-70Bf`, `llama3-8Bf`, `llama3-70bf`, `mistral-7Bf`, `qwen2.5-7Bf`, and `qwen2.5-72Bf` (for chat-finetuned models).')
-    parser.add_argument('--checkpoint-type', type=str, required=True,
-                        help='Type of checkpoint to convert, options are "meta" or "hf"')
+                        choices=['emu3-gen'])
     parser.add_argument('--bf16', action='store_true', help='Whether to load weights in bf16.')
     parser.add_argument('--fp16', action='store_true', help='Whether to load weights in fp16.')
     group.add_argument('--true-vocab-size', type=int, default=None,
@@ -31,8 +25,6 @@ def add_arguments(parser):
     group.add_argument('--vocab-file', type=str, default=None,
                        help='Path to the vocab file. If specified will use this to get vocab size and '
                        'trim padding from the embedding table.')
-    group.add_argument('--tokenizer-model', required=True,
-                       help='Tokenizer model file.')
     group.add_argument('--megatron-path', type=str, default=None,
                        help='Base directory of Megatron repository')
     group.add_argument("--make-vocab-size-divisible-by", type=int, default=None, help="Make vocab size divisible by")
@@ -47,23 +39,7 @@ def verify_transformers_version():
 
 
 NUM_SHARDS = {
-    "llama2-7B": 1,
-    "llama2-7Bf": 1,
-    "llama2-13B": 2,
-    "llama2-13Bf": 2,
-    "llama2-70B": 8,
-    "llama2-70Bf": 8,
-    "llama3-8B": 1,
-    "llama3-8Bf": 1,
-    "llama3-70B": 8,
-    "llama3-70Bf": 8,
-    "mistral-7B": 1,
-    "mistral-7Bf": 1,
-    "yi-34B": 8,
-    "qwen2.5-7B": 1,
-    "qwen2.5-7Bf": 1,
-    "qwen2.5-72B": 8,
-    "qwen2.5-72Bf": 8,
+    "emu3-gen": 1
 }
 
 
@@ -79,221 +55,6 @@ def read_json(path):
 def write_json(text, path):
     with open(path, "w") as f:
         json.dump(text, f)
-
-
-# This conversion is adapted from
-# https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/convert_llama_weights_to_hf.py
-def convert_to_hf(model_path, input_base_path, model_size, tokenizer_path):
-
-    if "llama2" in model_size:
-        from transformers import LlamaConfig as ModelConfig
-        from transformers import  LlamaTokenizer, LlamaTokenizerFast
-    elif "llama3" in model_size:
-        from transformers import LlamaConfig as ModelConfig
-    elif "mistral" in model_size:
-        from transformers import MistralConfig as ModelConfig
-
-    # for backward compatibility, before you needed the repo to be called `my_repo/model_size`
-    if not os.path.isfile(os.path.join(input_base_path, "params.json")):
-        input_base_path = os.path.join(input_base_path, model_size)
-
-    os.makedirs(model_path, exist_ok=True)
-
-    params = read_json(os.path.join(input_base_path, "params.json"))
-    num_shards = NUM_SHARDS[model_size]
-    params = params.get("model", params)
-    n_layers = params["n_layers"]
-    n_heads = params["n_heads"]
-    n_heads_per_shard = n_heads // num_shards
-    dim = params["dim"]
-    dims_per_head = dim // n_heads
-    base = params.get("rope_theta", 10000.0)
-    inv_freq = 1.0 / (base ** (torch.arange(0, dims_per_head, 2).float() / dims_per_head))
-    if base > 10000.0:
-        max_position_embeddings = 32768 if "mistral" in model_size else 16384
-    else:
-        max_position_embeddings = 4096 if "mistral" in model_size else 2048
-
-    if "llama2" in model_size:
-        tokenizer_class = LlamaTokenizer if LlamaTokenizerFast is None else LlamaTokenizerFast
-    elif model_size in ["llama3", "mistral"]:
-        tokenizer_class = transformers.AutoTokenizer.from_pretrained
-    else:
-        raise AttributeError(f"model_size={model_size} not supported")
-    if tokenizer_path is not None:
-        if "llama" in model_size:
-            tokenizer = tokenizer_class(tokenizer_path)
-            if "llama2" in model_size:
-                tokenizer.save_pretrained(model_path)
-                vocab_size = tokenizer.vocab_size if tokenizer_path is not None else 32000
-            elif "llama3" in model_size:
-                 vocab_size = 128256
-        elif "mistral" in model_size:
-            tokenizer = tokenizer_class.from_file(tokenizer_path)
-            vocab_size = 32768
-        else:
-            raise AttributeError(f"model_size={model_size} is not supported")
-
-    if params.get("n_kv_heads", None) is not None:
-        num_key_value_heads = params["n_kv_heads"]  # for GQA / MQA
-        num_local_key_value_heads = n_heads_per_shard // num_key_value_heads
-        key_value_dim = dim // num_key_value_heads
-    else:  # compatibility with other checkpoints
-        num_key_value_heads = n_heads
-        num_local_key_value_heads = n_heads_per_shard
-        key_value_dim = dim
-
-    # permute for sliced rotary
-    def permute(w, n_heads=n_heads, dim1=dim, dim2=dim):
-        return w.view(n_heads, dim1 // n_heads // 2, 2, dim2).transpose(1, 2).reshape(dim1, dim2)
-
-    print(f"Fetching all parameters from the checkpoint at {input_base_path}.")
-    # Load weights
-    if num_shards == 1:
-        # Not sharded
-        # (The sharded implementation would also work, but this is simpler.)
-        loaded = torch.load(os.path.join(input_base_path, "consolidated.00.pth"), map_location="cpu")
-    else:
-        # Sharded
-        loaded = [
-            torch.load(os.path.join(input_base_path, f"consolidated.{i:02d}.pth"), map_location="cpu")
-            for i in range(num_shards)
-        ]
-    param_count = 0
-    index_dict = {"weight_map": {}}
-    for layer_i in range(n_layers):
-        filename = f"pytorch_model-{layer_i + 1}-of-{n_layers + 1}.bin"
-        if num_shards == 1:
-            # Unsharded
-            q_proj = loaded[f"layers.{layer_i}.attention.wq.weight"]
-            k_proj = loaded[f"layers.{layer_i}.attention.wk.weight"]
-            if ("llama2" in model_size) or ("mistral" in model_size):
-                q_proj = permute(q_proj)
-                k_proj = permute(k_proj)
-            state_dict = {
-                f"model.layers.{layer_i}.self_attn.q_proj.weight": q_proj,
-                f"model.layers.{layer_i}.self_attn.k_proj.weight": k_proj,
-                f"model.layers.{layer_i}.self_attn.v_proj.weight": loaded[f"layers.{layer_i}.attention.wv.weight"],
-                f"model.layers.{layer_i}.self_attn.o_proj.weight": loaded[f"layers.{layer_i}.attention.wo.weight"],
-                f"model.layers.{layer_i}.mlp.gate_proj.weight": loaded[f"layers.{layer_i}.feed_forward.w1.weight"],
-                f"model.layers.{layer_i}.mlp.down_proj.weight": loaded[f"layers.{layer_i}.feed_forward.w2.weight"],
-                f"model.layers.{layer_i}.mlp.up_proj.weight": loaded[f"layers.{layer_i}.feed_forward.w3.weight"],
-                f"model.layers.{layer_i}.input_layernorm.weight": loaded[f"layers.{layer_i}.attention_norm.weight"],
-                f"model.layers.{layer_i}.post_attention_layernorm.weight": loaded[f"layers.{layer_i}.ffn_norm.weight"],
-            }
-        else:
-            # Sharded
-            # Note that attention.w{q,k,v,o}, feed_fordward.w[1,2,3], attention_norm.weight and ffn_norm.weight share
-            # the same storage object, saving attention_norm and ffn_norm will save other weights too, which is
-            # redundant as other weights will be stitched from multiple shards. To avoid that, they are cloned.
-
-            state_dict = {
-                f"model.layers.{layer_i}.input_layernorm.weight": loaded[0][
-                    f"layers.{layer_i}.attention_norm.weight"
-                ].clone(),
-                f"model.layers.{layer_i}.post_attention_layernorm.weight": loaded[0][
-                    f"layers.{layer_i}.ffn_norm.weight"
-                ].clone(),
-            }
-            state_dict[f"model.layers.{layer_i}.self_attn.q_proj.weight"] = permute(
-                torch.cat(
-                    [
-                        loaded[i][f"layers.{layer_i}.attention.wq.weight"].view(n_heads_per_shard, dims_per_head, dim)
-                        for i in range(num_shards)
-                    ],
-                    dim=0,
-                ).reshape(dim, dim)
-            )
-            state_dict[f"model.layers.{layer_i}.self_attn.k_proj.weight"] = permute(
-                torch.cat(
-                    [
-                        loaded[i][f"layers.{layer_i}.attention.wk.weight"].view(
-                            num_local_key_value_heads, dims_per_head, dim
-                        )
-                        for i in range(num_shards)
-                    ],
-                    dim=0,
-                ).reshape(key_value_dim, dim),
-                num_key_value_heads,
-                key_value_dim,
-                dim,
-            )
-            state_dict[f"model.layers.{layer_i}.self_attn.v_proj.weight"] = torch.cat(
-                [
-                    loaded[i][f"layers.{layer_i}.attention.wv.weight"].view(
-                        num_local_key_value_heads, dims_per_head, dim
-                    )
-                    for i in range(num_shards)
-                ],
-                dim=0,
-            ).reshape(key_value_dim, dim)
-
-            state_dict[f"model.layers.{layer_i}.self_attn.o_proj.weight"] = torch.cat(
-                [loaded[i][f"layers.{layer_i}.attention.wo.weight"] for i in range(num_shards)], dim=1
-            )
-            state_dict[f"model.layers.{layer_i}.mlp.gate_proj.weight"] = torch.cat(
-                [loaded[i][f"layers.{layer_i}.feed_forward.w1.weight"] for i in range(num_shards)], dim=0
-            )
-            state_dict[f"model.layers.{layer_i}.mlp.down_proj.weight"] = torch.cat(
-                [loaded[i][f"layers.{layer_i}.feed_forward.w2.weight"] for i in range(num_shards)], dim=1
-            )
-            state_dict[f"model.layers.{layer_i}.mlp.up_proj.weight"] = torch.cat(
-                [loaded[i][f"layers.{layer_i}.feed_forward.w3.weight"] for i in range(num_shards)], dim=0
-            )
-
-        state_dict[f"model.layers.{layer_i}.self_attn.rotary_emb.inv_freq"] = inv_freq
-        for k, v in state_dict.items():
-            index_dict["weight_map"][k] = filename
-            param_count += v.numel()
-        torch.save(state_dict, os.path.join(model_path, filename))
-
-    filename = f"pytorch_model-{n_layers + 1}-of-{n_layers + 1}.bin"
-    if num_shards == 1:
-        # Unsharded
-        state_dict = {
-            "model.embed_tokens.weight": loaded["tok_embeddings.weight"],
-            "model.norm.weight": loaded["norm.weight"],
-            "lm_head.weight": loaded["output.weight"],
-        }
-    else:
-        d = 0 if "llama3" in model_size else 1
-        state_dict = {
-            "model.norm.weight": loaded[0]["norm.weight"],
-            "model.embed_tokens.weight": torch.cat(
-                [loaded[i]["tok_embeddings.weight"] for i in range(num_shards)], dim=d
-            ),
-            "lm_head.weight": torch.cat([loaded[i]["output.weight"] for i in range(num_shards)], dim=0),
-        }
-
-    for k, v in state_dict.items():
-        index_dict["weight_map"][k] = filename
-        param_count += v.numel()
-    torch.save(state_dict, os.path.join(model_path, filename))
-
-    # Write configs
-    index_dict["metadata"] = {"total_size": param_count * 2}
-    write_json(index_dict, os.path.join(model_path, "pytorch_model.bin.index.json"))
-    ffn_dim_multiplier = params["ffn_dim_multiplier"] if "ffn_dim_multiplier" in params else 1
-    multiple_of = params["multiple_of"] if "multiple_of" in params else 256
-    config = ModelConfig(
-        hidden_size=dim,
-        intermediate_size=compute_intermediate_size(dim, ffn_dim_multiplier, multiple_of),
-        num_attention_heads=params["n_heads"],
-        num_hidden_layers=params["n_layers"],
-        rms_norm_eps=params["norm_eps"],
-        num_key_value_heads=num_key_value_heads,
-        vocab_size=vocab_size,
-        rope_theta=base,
-        max_position_embeddings=max_position_embeddings,
-    )
-    config.save_pretrained(model_path)
-
-    # Make space so we can load the model properly now.
-    del state_dict
-    del loaded
-    gc.collect()
-
-    return model_path
 
 
 def load_args_from_checkpoint(args):
@@ -400,7 +161,7 @@ def load_checkpoint_to_model(args):
     from transformers import AutoModelForCausalLM
 
     # Load Huggingface model.
-    hf_model = AutoModelForCausalLM.from_pretrained(args.load, torch_dtype=args.params_dtype, low_cpu_mem_usage=True, device_map="cpu")
+    hf_model = AutoModelForCausalLM.from_pretrained(args.load, torch_dtype=args.params_dtype, low_cpu_mem_usage=True, device_map="cpu", trust_remote_code=True)
 
     # Init Megatron model.
     model = model_provider(True, True).to(args.params_dtype)
@@ -425,11 +186,6 @@ def _load_checkpoint(queue, args):
                      os.path.pardir)))
     if args.megatron_path is not None:
         sys.path.insert(0, args.megatron_path)
-
-    # Convert Meta checkpoint to HF format as an intermediate step
-    if args.checkpoint_type == "meta":
-        model_tmp_path = convert_to_hf(model_path=os.path.join(args.save_dir, 'tmp'), input_base_path=args.load_dir, model_size=args.model_size, tokenizer_path=args.tokenizer_model)
-        args.load_dir = model_tmp_path
 
     try:
         from megatron.training.arguments import parse_args, validate_args
@@ -465,20 +221,10 @@ def _load_checkpoint(queue, args):
         sys.argv.extend(["--make-vocab-size-divisible-by", str(args.make_vocab_size_divisible_by)])
 
     margs = parse_args()
-    margs.tokenizer_model = args.tokenizer_model
     load_args_from_checkpoint(margs)
-
-    if "llama2" in args.model_size:
-        margs.tokenizer_type = "Llama2Tokenizer"
-    elif "yi" in args.model_size:
-        margs.tokenizer_type = "HuggingFaceTokenizer"
-    elif "llama3" in args.model_size:
-        margs.tokenizer_type = "HuggingFaceTokenizer"
-    elif "mistral" in args.model_size:
-        margs.tokenizer_type = "HuggingFaceTokenizer"
-    elif "qwen2.5" in args.model_size:
-        margs.tokenizer_type = "HuggingFaceTokenizer"
-        margs.add_qkv_bias = True
+    margs.attention_softmax_in_fp32 = True
+    margs.tokenizer_type = "HuggingFaceTokenizer"
+    margs.tokenizer_model = args.load_dir
 
     # Arguments do sanity checks on the world size, but we don't care,
     # so trick it into thinking we are plenty of processes.
@@ -564,8 +310,8 @@ def _load_checkpoint(queue, args):
     margs.model_size = args.model_size
 
     # Get true (non-padded) vocab size
-    tokenizer = transformers.AutoTokenizer.from_pretrained(margs.tokenizer_model)
-    md.true_vocab_size = tokenizer._tokenizer.get_vocab_size(with_added_tokens=True)
+    
+    md.true_vocab_size = 184622
 
     # Get first pipe stage.
     mpu.set_tensor_model_parallel_rank(0)
@@ -659,9 +405,6 @@ def _load_checkpoint(queue, args):
         queue_put("output layer", message)
 
     queue.put("done")
-
-    if args.checkpoint_type == "meta":
-        shutil.rmtree(os.path.join(args.save_dir, 'tmp'))
 
 
 def load_checkpoint(queue, args):

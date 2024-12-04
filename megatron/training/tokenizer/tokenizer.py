@@ -5,8 +5,6 @@
 import base64
 import json
 import math
-import types
-from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -83,7 +81,7 @@ def build_tokenizer(args, **kwargs):
 
         # Currently, only HuggingFace tokenizers are supported.
         underlying_tokenizer = transformers.AutoTokenizer.from_pretrained(
-            pretrained_model_name_or_path=args.tokenizer_model, **kwargs
+            pretrained_model_name_or_path=args.tokenizer_model, trust_remote_code=True, **kwargs
         )
 
         tokenizer = MultimodalTokenizer(
@@ -125,12 +123,12 @@ class _HuggingFaceTokenizer(MegatronTokenizer):
             import transformers
         except ImportError:
             raise EnvironmentError(
-                f"The transformers library must be installed to use huggingface_tokenizer_provider"
+                "The transformers library must be installed to use huggingface_tokenizer_provider"
             )
 
         # TODO(bnorick): download tokenizer once to lustre and use force offline to make sure all tasks read it from there
         self._tokenizer = transformers.AutoTokenizer.from_pretrained(
-            pretrained_model_name_or_path=pretrained_model_name_or_path, **kwargs
+            pretrained_model_name_or_path=pretrained_model_name_or_path, trust_remote_code=True, **kwargs
         )
         self._vocab = self._tokenizer.get_vocab()
         self._inv_vocab = {token_id: token for token, token_id in self._vocab.items()}

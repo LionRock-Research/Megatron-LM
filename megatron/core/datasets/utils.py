@@ -5,7 +5,6 @@ from enum import Enum
 from typing import List, Optional, Tuple
 
 import numpy
-import torch
 
 from ..utils import log_single_rank
 

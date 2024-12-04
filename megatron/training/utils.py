@@ -18,7 +18,7 @@ except ImportError:
 
         import warnings
         warnings.warn(
-            f'Transformer Engine and Apex are not installed. '
+            'Transformer Engine and Apex are not installed. '
             'Falling back to local implementations of '
             'multi_tensor_applier and multi_tensor_l2norm'
         )
@@ -345,8 +345,7 @@ def get_blend_and_blend_per_split(args):
         else:
             assert args.data_path is not None
             blend = get_blend_from_list(args.data_path)
-    else:
-        assert use_per_split_data_path
+    elif use_per_split_data_path:
         if args.per_split_data_args_path is not None:
             with open(args.per_split_data_args_path, 'r') as f:
                 per_split_data_args = json.load(f)

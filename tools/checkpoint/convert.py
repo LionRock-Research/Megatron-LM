@@ -4,6 +4,8 @@ import argparse
 import importlib
 import torch.multiprocessing as mp
 import sys
+import traceback
+import signal
 
 # A loader is a python file with at least two functions
 # - add_arguments - takes in a parser and adds any arguments needed
@@ -122,7 +124,7 @@ def main():
                         help='Directory to load model checkpoint from')
     parser.add_argument('--save-dir', type=str, required=True,
                         help='Directory to save model checkpoint to')
-    parser.add_argument('--max-queue-size', type=int, default=50,
+    parser.add_argument('--max-queue-size', type=int, default=15,
                         help='Maximum number of tensors in the queue')
     parser.add_argument('--no-checking', action='store_false',
                         help='Do not perform checking on the name and ordering of weights',
@@ -144,10 +146,28 @@ def main():
     saver_proc.start()
 
     print("Starting loader...")
-    loader.load_checkpoint(queue, args)
+    try:
+        loader.load_checkpoint(queue, args)
+    except Exception as e:
+        print("Loader failed with error:")
+        traceback.print_exc()
+        # Signal saver to exit
+        queue.put("exit")
+        saver_proc.join(timeout=5)
+        if saver_proc.is_alive():
+            saver_proc.terminate()
+        sys.exit(1)
 
     print("Waiting for saver to complete...")
-    saver_proc.join()
+    saver_proc.join(timeout=300)  # 5 minute timeout
+    if saver_proc.is_alive():
+        print("Saver process did not complete in time, terminating...")
+        saver_proc.terminate()
+        sys.exit(1)
+    
+    if saver_proc.exitcode != 0:
+        print(f"Saver process exited with non-zero code: {saver_proc.exitcode}")
+        sys.exit(1)
 
 
 if __name__ == '__main__':

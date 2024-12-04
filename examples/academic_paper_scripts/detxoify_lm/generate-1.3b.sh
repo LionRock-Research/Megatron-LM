@@ -1,6 +1,6 @@
 #!/bin/bash
 CHECKPOINT_PATH=$2          # Your model ckpt
-VOCAB_FILE=gpt2-vocab.json
+=gpt2-vocab.json
 MERGE_FILE=gpt2-merges.txt
 
 GPUS_PER_NODE=1

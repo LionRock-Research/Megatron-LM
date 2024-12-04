@@ -4,7 +4,6 @@
 
 import os
 import sys
-import torch
 
 from megatron.core import Timers
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator, unset_num_microbatches_calculator
@@ -154,7 +153,6 @@ def _set_tensorboard_writer(args):
     global _GLOBAL_TENSORBOARD_WRITER
     _ensure_var_is_not_initialized(_GLOBAL_TENSORBOARD_WRITER,
                                    'tensorboard writer')
-
     if hasattr(args, 'tensorboard_dir') and \
        args.tensorboard_dir and args.rank == (args.world_size - 1):
         try:

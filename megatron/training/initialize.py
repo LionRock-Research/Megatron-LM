@@ -61,7 +61,7 @@ def initialize_megatron(
     if args.use_checkpoint_args or args_defaults.get("use_checkpoint_args", False):
         assert args.load is not None, "--use-checkpoint-args requires --load argument"
         load_args_from_checkpoint(args)
-
+    print(args_defaults)
     if args.yaml_cfg is not None:
         args = validate_yaml(args, args_defaults)
     else:

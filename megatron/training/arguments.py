@@ -59,13 +59,11 @@ def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     # Custom arguments.
     if extra_args_provider is not None:
         parser = extra_args_provider(parser)
-
     # Parse.
     if ignore_unknown_args:
         args, _ = parser.parse_known_args()
     else:
         args = parser.parse_args()
-
     # Experimental yaml
     if args.yaml_cfg is not None:
         from .yaml_arguments import load_yaml

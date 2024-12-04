@@ -2,17 +2,14 @@
 
 """Megatron arguments."""
 
-import argparse
 import dataclasses
 import json
 import os
 import torch
-import types
 
-from itertools import chain, starmap
 from types import SimpleNamespace
-import yaml, re, os
-from types import SimpleNamespace
+import yaml
+import re
 
 import torch.nn.functional as F
 
@@ -177,6 +174,7 @@ def validate_yaml(args, defaults={}):
 
     # Iteration-based training.
     if args.train_iters:
+        print(args)
         # If we use iteration-based training, make sure the
         # sample-based options are off.
         assert args.train_samples is None, \
@@ -447,7 +445,7 @@ def core_transformer_config_from_yaml(args, transfomer_key = "language_model"):
         return TransformerConfig(**kw_args)
 
 def load_yaml(yaml_path):
-    print(f"warning using experimental yaml arguments feature, argparse arguments will be ignored")
+    print("warning using experimental yaml arguments feature, argparse arguments will be ignored")
     with open(yaml_path, "r") as f:
         config = yaml.load(f,Loader=yaml.FullLoader)
         # Convert to nested namespace

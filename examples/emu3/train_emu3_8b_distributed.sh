@@ -4,7 +4,7 @@
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
-GPUS_PER_NODE=8
+GPUS_PER_NODE=1
 # Change for multinode config
 MASTER_ADDR=localhost
 MASTER_PORT=6000
@@ -52,8 +52,8 @@ TRAINING_ARGS=(
 )
 
 MODEL_PARALLEL_ARGS=(
-	--tensor-model-parallel-size 1
-	--pipeline-model-parallel-size 1
+	--tensor-model-parallel-size 8 
+	--pipeline-model-parallel-size 16 
 )
 
 DATA_ARGS=(
