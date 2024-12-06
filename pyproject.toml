@@ -75,7 +75,7 @@ channels = ["/root/.cache/prefix", "https://meta-forge.cn-gd.ufileos.com", "nvid
 platforms = ["linux-64"]
 
 [tool.pixi.pypi-dependencies]
-# megatron-core = { path = ".", editable = true }
+#megatron-core = { path = ".", editable = true }
 
 [tool.pixi.tasks]
 hello_world = "rm -rf ./ckpt && torchrun --nproc-per-node 1 examples/run_simple_mcore_train_loop.py"
@@ -97,3 +97,5 @@ ipykernel = ">=6.29.5,<7"
 transformers = ">=4.46.3,<5"
 tensorboard = ">=2.18.0,<3"
 accelerate = ">=1.1.1,<2"
+tiktoken = ">=0.8.0,<0.9"
+pytest = ">=8.3.4,<9"

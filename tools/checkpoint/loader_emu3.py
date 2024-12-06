@@ -124,7 +124,7 @@ def set_attn_state(args, layer, hf_layer):
             hf_attn.q_proj.bias.reshape((ng, dim*nh//ng)),
             hf_attn.k_proj.bias.reshape((ng, dim)),
             hf_attn.v_proj.bias.reshape((ng, dim)),
-        ], dim=1).reshape(-1))
+        ], dim=0).reshape(-1))
 
     attn.dense.weight.data.copy_(hf_attn.o_proj.weight)
 
@@ -262,7 +262,7 @@ def _load_checkpoint(queue, args):
     check_for_arg('swiglu', False)
 
     # Determine how to make our models.
-    assert args.model_type == 'GPT', 'Llama-2, Llama-3 and Mistral are GPT models.'
+    assert args.model_type == 'GPT', 'EMU3 are GPT models.'
     margs.model_type = ModelType.encoder_or_decoder
     margs.params_dtype = torch.bfloat16 if args.bf16 else torch.float16 if args.fp16 else torch.float32
 

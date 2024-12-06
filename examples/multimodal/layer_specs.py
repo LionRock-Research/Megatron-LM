@@ -37,7 +37,7 @@ except ImportError:
 
     from megatron.core.transformer.torch_norm import WrappedTorchNorm
 
-    warnings.warn(f'Apex is not installed. Falling back to Torch Norm')
+    warnings.warn('Apex is not installed. Falling back to Torch Norm')
     LNImpl = WrappedTorchNorm
 
 
@@ -59,7 +59,7 @@ def get_layer_spec(is_vit, normalization) -> ModuleSpec:
             )
             assert version_geq_2_4, "Torch version >= 2.4.0 is required for RMSNorm"
             if HAVE_APEX:
-                warnings.warn(f'Apex does not support RMSNorm. Falling back to Torch Norm')
+                warnings.warn('Apex does not support RMSNorm. Falling back to Torch Norm')
             norm = WrappedTorchNorm
     else:
         raise RuntimeError("unknown normalization", normalization)

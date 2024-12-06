@@ -336,7 +336,6 @@ class TELayerNormColumnParallelLinear(te.pytorch.LayerNormLinear):
             zero_centered_gamma=self.config.layernorm_zero_centered_gamma,
             **extra_kwargs,
         )
-
         world_size = get_tensor_model_parallel_world_size()
         rank = get_tensor_model_parallel_rank()
 

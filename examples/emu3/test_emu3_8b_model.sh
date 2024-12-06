@@ -41,6 +41,7 @@ GPT_MODEL_ARGS=(
     --ffn-hidden-size 14336
     --make-vocab-size-divisible-by 2
     --swiglu
+    --disable-bias-linear
 )
 
 TOKENIZER_ARGS=(
