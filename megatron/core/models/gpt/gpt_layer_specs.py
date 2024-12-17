@@ -49,6 +49,7 @@ except ImportError:
     warnings.warn('Apex is not installed. Falling back to Torch Norm')
     LNImpl = WrappedTorchNorm
 
+# TODO: may implement RMSNorm to use local implementation
 
 def get_gpt_layer_with_transformer_engine_spec(
     num_experts: Optional[int] = None,

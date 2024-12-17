@@ -6,7 +6,6 @@ import math
 import os
 from typing import Dict, List, Optional
 import pytest
-import copy
 import random
 
 import torch
@@ -73,7 +72,7 @@ model_configs_inference = {
     "126m": ModelConfig(768, 1e-5, 12, 64, 12, 16),
 }
 backends_inference = ["FlashAttention", "UnfusedAttention"]
-module_inference = ["TransformerLayer", "MultiheadAttention"]
+module_inference = ["TransformerLayer", "MultiheaadAttention"]
 input_formats_inference = ["sbhd", "bshd"]
 
 param_types = [torch.float32, torch.float16]

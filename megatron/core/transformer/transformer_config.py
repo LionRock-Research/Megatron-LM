@@ -345,6 +345,9 @@ class TransformerConfig(ModelParallelConfig):
     flash_decode: bool = False
     """ Use the optimized flash decoding kernel during inference. """
 
+    fuse_qkv: bool = True
+    """Fuse QKV linear layers."""
+
     def __post_init__(self):
         """Python dataclass method that is used to modify attributes after initialization.
         See https://docs.python.org/3/library/dataclasses.html#post-init-processing for more
@@ -397,7 +400,7 @@ class TransformerConfig(ModelParallelConfig):
                 "alltoall"
             ]:
                 raise ValueError(
-                    f'moe_shared_expert_overlap only works with alltoall token dispatcher.'
+                    'moe_shared_expert_overlap only works with alltoall token dispatcher.'
                 )
 
         if self.moe_expert_capacity_factor is not None:
@@ -568,7 +571,6 @@ class TransformerConfig(ModelParallelConfig):
                 assert isinstance(
                     self.cp_comm_type, str
                 ), "Unsupported communication type for context parallelism!"
-
 
 @dataclass
 class MLATransformerConfig(TransformerConfig):
