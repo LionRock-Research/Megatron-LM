@@ -57,6 +57,7 @@ def get_gpt_layer_with_transformer_engine_spec(
     qk_layernorm: Optional[bool] = False,
     multi_latent_attention: Optional[bool] = False,
     fp8: Optional[str] = None,
+    qkv_linear_fusion: Optional[bool] = True,
 ) -> ModuleSpec:
     """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
 
@@ -106,27 +107,54 @@ def get_gpt_layer_with_transformer_engine_spec(
         # for QKLayerNorm if TE Version < 1.9;
         # we instead use the Apex implementation.
         qk_norm = TENorm if is_te_min_version("1.9.0") else FusedLayerNorm
-
-        return ModuleSpec(
-            module=TransformerLayer,
-            submodules=TransformerLayerSubmodules(
-                self_attention=ModuleSpec(
-                    module=SelfAttention,
-                    params={"attn_mask_type": AttnMaskType.causal},
-                    submodules=SelfAttentionSubmodules(
-                        linear_qkv=TELayerNormColumnParallelLinear,
-                        core_attention=TEDotProductAttention,
-                        linear_proj=TERowParallelLinear,
-                        q_layernorm=qk_norm if qk_layernorm else IdentityOp,
-                        k_layernorm=qk_norm if qk_layernorm else IdentityOp,
+        
+        if qkv_linear_fusion:
+            return ModuleSpec(
+                module=TransformerLayer,
+                submodules=TransformerLayerSubmodules(
+                    self_attention=ModuleSpec(
+                        module=SelfAttention,
+                        params={"attn_mask_type": AttnMaskType.causal},
+                        submodules=SelfAttentionSubmodules(
+                            linear_qkv=TELayerNormColumnParallelLinear,
+                            core_attention=TEDotProductAttention,
+                            linear_proj=TERowParallelLinear,
+                            q_layernorm=qk_norm if qk_layernorm else IdentityOp,
+                            k_layernorm=qk_norm if qk_layernorm else IdentityOp,
+                        ),
                     ),
+                    self_attn_bda=get_bias_dropout_add,
+                    pre_mlp_layernorm=TENorm if num_experts else IdentityOp,
+                    mlp=mlp,
+                    mlp_bda=get_bias_dropout_add,
                 ),
-                self_attn_bda=get_bias_dropout_add,
-                pre_mlp_layernorm=TENorm if num_experts else IdentityOp,
-                mlp=mlp,
-                mlp_bda=get_bias_dropout_add,
-            ),
-        )
+            )
+        else:
+            return ModuleSpec(
+                module=TransformerLayer,
+                submodules=TransformerLayerSubmodules(
+                    input_layernorm=TENorm,
+                    self_attention=ModuleSpec(
+                        module=SelfAttention,
+                        params={"attn_mask_type": AttnMaskType.causal},
+                        submodules=SelfAttentionSubmodules(
+                            linear_q=TEColumnParallelLinear,
+                            linear_k=TEColumnParallelLinear,
+                            linear_v=TEColumnParallelLinear,
+                            core_attention=TEDotProductAttention,
+                            linear_proj=TERowParallelLinear,
+                            q_layernorm=qk_norm if qk_layernorm else IdentityOp,
+                            k_layernorm=qk_norm if qk_layernorm else IdentityOp,
+                            
+                        ),
+                    ),
+                    self_attn_bda=get_bias_dropout_add,
+                    pre_mlp_layernorm=TENorm if num_experts else IdentityOp,
+                    mlp=mlp,
+                    mlp_bda=get_bias_dropout_add,
+                ),
+            )
+
 
 
 def get_gpt_layer_local_spec(

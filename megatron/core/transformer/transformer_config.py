@@ -345,7 +345,7 @@ class TransformerConfig(ModelParallelConfig):
     flash_decode: bool = False
     """ Use the optimized flash decoding kernel during inference. """
 
-    fuse_qkv: bool = True
+    qkv_linear_fusion: bool = True
     """Fuse QKV linear layers."""
 
     def __post_init__(self):

@@ -44,6 +44,7 @@ class ModelSchema:
         if src is None:
             return
         dst = cls._get_deep_attr(obj, path)
+        print(f"setting {path} to {cls._get_deep_attr(obj, path)}")
         assert isinstance(src, torch.Tensor), "src is <%s>." % type(src).__name__
         assert isinstance(dst, torch.Tensor), "dst is <%s>." % type(dst).__name__
         assert not dst.requires_grad, "should be using '.data', from getter above."

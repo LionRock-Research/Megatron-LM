@@ -961,6 +961,7 @@ def _add_network_size_args(parser):
                        help='Untie embeddings and output weights.')
     group.add_argument('--multi-latent-attention', action='store_true',
                        help='Use multi-latent attention for model.')
+    group.add_argument('--qkv-linear-fusion', action='store_true', help='Q, K, V linear fusion')
     return parser
 
 

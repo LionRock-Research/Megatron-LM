@@ -225,7 +225,6 @@ def _load_checkpoint(queue, args):
     margs.attention_softmax_in_fp32 = True
     margs.tokenizer_type = "HuggingFaceTokenizer"
     margs.tokenizer_model = args.load_dir
-
     # Arguments do sanity checks on the world size, but we don't care,
     # so trick it into thinking we are plenty of processes.
     margs.world_size = margs.tensor_model_parallel_size * margs.pipeline_model_parallel_size
@@ -306,6 +305,8 @@ def _load_checkpoint(queue, args):
     md.checkpoint_args = margs
     md.consumed_train_samples = 0
     md.consumed_valid_samples = 0
+    md.num_query_groups = margs.num_query_groups
+    md.kv_channels = margs.kv_channels
 
     margs.model_size = args.model_size
 

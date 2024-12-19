@@ -13,8 +13,9 @@ from megatron.training.checkpointing import _load_base_checkpoint
 from types import SimpleNamespace
 from transformers import AutoModelForCausalLM
 
-EMU3_HF_MODEL_DIR = "/data/models/Emu3-Gen"
-EMU3_MEGATRON_MODEL_DIR = "/data/models/Emu3-Gen-Megatron"
+QKV_LINEAR_FUSION = True
+EMU3_HF_MODEL_DIR = "/data/models/Emu3-Stage1"
+EMU3_MEGATRON_MODEL_DIR = "/data/models/Emu3-Stage1-Megatron" if QKV_LINEAR_FUSION else "/data/models/Emu3-Gen-Megatron-SplitedQKV"
 CACHE_DIR = "/root/Megatron-LM/cache"
 SEQ_LEN = 128
 SEED = 42
@@ -136,8 +137,9 @@ def test_model_forward_and_backward(debug=False, deterministic_mode=False, test_
     initialize_distributed(tensor_model_parallel_size=1, pipeline_model_parallel_size=1)
     model_parallel_cuda_manual_seed(SEED)
     # prepare input
-    embed_grad_hf = torch.randint(0, 184622, (1, SEQ_LEN), dtype=torch.int32, device="cuda")
-    input_megatron = embed_grad_hf.clone().detach()
+    input_hf = torch.from_numpy(np.load("/root/Megatron-LM/examples/emu3/tests/input_ids.npy")).to(device="cuda")
+    # input_hf = torch.randint(0, 184622, (1, SEQ_LEN), dtype=torch.int32, device="cuda")
+    input_megatron = input_hf.clone().detach()
     position_ids_hf = torch.arange(SEQ_LEN, dtype=torch.int32, device="cuda").unsqueeze(0)
     position_ids_megatron = position_ids_hf.clone().detach()
     # Create causal attention mask where upper triangle is 0 and lower triangle is -inf
@@ -166,11 +168,12 @@ def test_model_forward_and_backward(debug=False, deterministic_mode=False, test_
         add_bias_linear=False,
         deterministic_mode=deterministic_mode,
         params_dtype=DTYPE_DICT[DTYPE],
+        qkv_linear_fusion=QKV_LINEAR_FUSION,
     )
     print(transformer_config)
     gpt_model = GPTModel(
         config=transformer_config,
-        transformer_layer_spec=get_gpt_layer_with_transformer_engine_spec(),
+        transformer_layer_spec=get_gpt_layer_with_transformer_engine_spec(qkv_linear_fusion=QKV_LINEAR_FUSION),
         vocab_size=184622,
         max_sequence_length=9216,
         share_embeddings_and_output_weights=False,
@@ -183,16 +186,20 @@ def test_model_forward_and_backward(debug=False, deterministic_mode=False, test_
     print(gpt_model)
     load_weights(gpt_model)
     print("Megatron model built.")
-    print(gpt_model.decoder.layers[0].self_attention.linear_qkv.layer_norm_weight.detach().cpu().float().numpy())
     print("Running megatron model forward and backward...")
     gpt_model.eval()  # Switch to train mode
     if debug:
         for name, module in gpt_model.named_modules():
-            module.register_forward_hook(generate_hook(module, "megatron_" + name))
-        # rms norm weight
-        np.save(f"{CACHE_DIR}/megatron_rmsnorm_weight.npy", gpt_model.decoder.layers[0].self_attention.linear_qkv.layer_norm_weight.clone().detach().to("cpu").float().numpy())
+            module.register_forward_hook(generate_hook(module, "megatron_" + name, dump_input=True))
         # qkv linear weight
-        np.save(f"{CACHE_DIR}/megatron_qkv_linear_weight.npy", gpt_model.decoder.layers[0].self_attention.linear_qkv.weight.clone().detach().to("cpu").float().numpy())
+        if QKV_LINEAR_FUSION:
+            np.save(f"{CACHE_DIR}/megatron_rmsnorm_weight.npy", gpt_model.decoder.layers[0].self_attention.linear_qkv.layer_norm_weight.clone().detach().to("cpu").float().numpy())
+            np.save(f"{CACHE_DIR}/megatron_qkv_linear_weight.npy", gpt_model.decoder.layers[0].self_attention.linear_qkv.weight.clone().detach().to("cpu").float().numpy())
+        else:
+            np.save(f"{CACHE_DIR}/megatron_rmsnorm_weight.npy", gpt_model.decoder.layers[0].input_layernorm.weight.clone().detach().to("cpu").float().numpy())
+            np.save(f"{CACHE_DIR}/megatron_q_linear_weight.npy", gpt_model.decoder.layers[0].self_attention.linear_q.weight.clone().detach().to("cpu").float().numpy())
+            np.save(f"{CACHE_DIR}/megatron_k_linear_weight.npy", gpt_model.decoder.layers[0].self_attention.linear_k.weight.clone().detach().to("cpu").float().numpy())
+            np.save(f"{CACHE_DIR}/megatron_v_linear_weight.npy", gpt_model.decoder.layers[0].self_attention.linear_v.weight.clone().detach().to("cpu").float().numpy())
         # linear proj weight
         np.save(f"{CACHE_DIR}/megatron_linear_proj_weight.npy", gpt_model.decoder.layers[0].self_attention.linear_proj.weight.clone().detach().to("cpu").float().numpy())
         # mlp linear fc1 weight
@@ -205,7 +212,9 @@ def test_model_forward_and_backward(debug=False, deterministic_mode=False, test_
         output_megatron = gpt_model(input_megatron, position_ids_megatron, attention_mask_megatron)
         
         # Calculate loss and run backward
-        labels_megatron = torch.randint(0, 184622, (1, SEQ_LEN), dtype=torch.int64, device="cuda")
+        labels_megatron = input_megatron.detach().clone().view(-1)
+        labels_megatron[:-1] = labels_megatron[1:].clone()
+        labels_megatron[-1] = 0
         loss_megatron = F.cross_entropy(output_megatron.view(-1, 184622), labels_megatron.view(-1))
         loss_megatron.backward()
         
@@ -230,12 +239,11 @@ def test_model_forward_and_backward(debug=False, deterministic_mode=False, test_
         EMU3_HF_MODEL_DIR,
         device_map="cuda:0",
         torch_dtype=DTYPE_DICT[DTYPE],
+        # attn_implementation="flash_attention_2" if DTYPE in {'float16', 'bfloat16'} else "eager",
         attn_implementation="eager",
         trust_remote_code=True,
     )
     print(hf_model)
-    # check param dtype
-    print(hf_model.model.layers[0].input_layernorm.weight.detach().cpu().float().numpy())
     hf_model.cuda()
     hf_model.eval()  # Switch to train mode
     if debug:
@@ -263,23 +271,25 @@ def test_model_forward_and_backward(debug=False, deterministic_mode=False, test_
 
     print("Running hf model forward and backward...")
     if test_backward:
-        output_hf = hf_model(input_ids=embed_grad_hf, position_ids=position_ids_hf, attention_mask=attention_mask_hf).logits
+        labels_hf = input_hf.detach().clone().view(-1)
+        labels_hf[:-1] = labels_hf[1:].clone()
+        labels_hf[-1] = 0
+        output_hf = hf_model(input_ids=input_hf, position_ids=position_ids_hf, attention_mask=attention_mask_hf).logits
         
         # Calculate loss and run backward with same labels
-        labels_hf = labels_megatron.clone().detach()  # Use same labels as megatron
         loss_hf = F.cross_entropy(output_hf.view(-1, 184622), labels_hf.view(-1))
         loss_hf.backward()
         
-        embed_grad_hf = hf_model.model.embed_tokens.weight.grad[0:10].clone().cpu()
+        input_hf = hf_model.model.embed_tokens.weight.grad[0:10].clone().cpu()
         output_hf = output_hf.clone().detach().cpu()
     else:
         with torch.no_grad():
-            output_hf = hf_model(input_ids=embed_grad_hf, position_ids=position_ids_hf, attention_mask=attention_mask_hf).logits.clone().detach().cpu()
+            output_hf = hf_model(input_ids=input_hf, position_ids=position_ids_hf, attention_mask=attention_mask_hf).logits.clone().detach().cpu()
 
     # Compare forward outputs
     assert check_tol(output_megatron, output_hf, atol=ATOL[DTYPE], rtol=RTOL[DTYPE]), "Output not close enough"
     if test_backward:
-        assert check_tol(embed_grad_megatron, embed_grad_hf, atol=ATOL[DTYPE], rtol=RTOL[DTYPE]), "Input gradient not close enough"
+        assert check_tol(embed_grad_megatron, input_hf, atol=ATOL[DTYPE], rtol=RTOL[DTYPE]), "Input gradient not close enough"
 
 
 if __name__ == "__main__":
@@ -289,4 +299,4 @@ if __name__ == "__main__":
     os.environ["NVIDIA_TF32_OVERRIDE"] = "0"
     os.environ["NVTE_FLASH_ATTN"] = "0"
     os.environ["NVTE_FUSED_ATTN"] = "0"
-    test_model_forward_and_backward(debug=True, deterministic_mode=True, test_backward=False)
+    test_model_forward_and_backward(debug=True, deterministic_mode=False, test_backward=True)

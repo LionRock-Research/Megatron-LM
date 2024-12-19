@@ -26,6 +26,8 @@ def add_arguments(parser):
                        help='Which Transformer implementation to use.')
     group.add_argument('--target-expert-parallel-size', type=int, default=1,
                        help='Target expert model parallel size, default to 1')
+    group.add_argument('--qkv-linear-fusion', action='store_true',
+                       help='Whether to use qkv linear fusion')
 
 
 def save_checkpoint(queue, args):
@@ -136,7 +138,6 @@ def save_checkpoint(queue, args):
                 '--ckpt-format', 'torch', # only 'torch' supported for conversion
                 '--no-one-logger',
                 ]
-
     if md.make_vocab_size_divisible_by is not None:
         sys.argv.extend(['--make-vocab-size-divisible-by', str(md.make_vocab_size_divisible_by)])
     if md.params_dtype == torch.float16:
@@ -203,6 +204,7 @@ def save_checkpoint(queue, args):
     margs.tensorboard_dir = None
     margs.tokenizer_model = None
     margs.transformer_impl = args.saver_transformer_impl
+    margs.qkv_linear_fusion = args.qkv_linear_fusion
 
     set_global_variables(margs, build_tokenizer=False)
 
@@ -284,6 +286,7 @@ def save_checkpoint(queue, args):
     schema = get_model_schema(
         md.model_type,
         margs.transformer_impl,
+        args.qkv_linear_fusion,
         margs.num_experts,
         margs.expert_model_parallel_size,
     )
@@ -364,7 +367,25 @@ def save_checkpoint(queue, args):
                 post_norm_bias = msg.pop("post norm bias")
 
             # Split up the parallel tensors
-            qkv_weight = chunk_weight(msg.pop("qkv weight"), "column", args.target_tensor_parallel_size)
+            qkv_weight = msg.pop("qkv weight")
+            if args.qkv_linear_fusion:
+                qkv_weight = chunk_weight(qkv_weight, "column", args.target_tensor_parallel_size)
+            else:
+                tp = args.target_tensor_parallel_size
+                nh = md.num_attention_heads // tp
+                ng = md.num_query_groups // tp
+                nh_per_g = nh // ng
+                dim = md.kv_channels
+                assert nh % ng == 0
+            
+                qkv_weight = qkv_weight.reshape((ng, dim*(nh_per_g+2), -1))
+                q_weight = qkv_weight[:, :dim*nh_per_g, :].reshape((dim*nh_per_g*ng, -1))
+                k_weight = qkv_weight[:, dim*nh_per_g:dim*(nh_per_g+1), :].reshape((dim*ng, -1))
+                v_weight = qkv_weight[:, dim*(nh_per_g+1):, :].reshape((dim*ng, -1))
+                q_weight = chunk_weight(q_weight, "column", args.target_tensor_parallel_size)
+                k_weight = chunk_weight(k_weight, "column", args.target_tensor_parallel_size)
+                v_weight = chunk_weight(v_weight, "column", args.target_tensor_parallel_size)
+                
             dense_weight = chunk_weight(msg.pop("dense weight"), "row", args.target_tensor_parallel_size)
             mlp_l1_weight = chunk_weight(msg.pop("mlp l1 weight"), "row", args.target_tensor_parallel_size, args.target_expert_parallel_size)
 
@@ -394,12 +415,22 @@ def save_checkpoint(queue, args):
             # Save them to the model
             for ep_rank in range(args.target_expert_parallel_size):
                 for tp_rank in range(args.target_tensor_parallel_size):
-                    params_dict = {
-                        "self_attn_norm_weight" : input_norm_weight,
-                        "self_attn_qkv_weight" : qkv_weight[tp_rank],
-                        "self_attn_proj_weight" : dense_weight[tp_rank],
-                        "mlp_norm_weight" : post_norm_weight
-                    }
+                    if args.qkv_linear_fusion:
+                        params_dict = {
+                            "self_attn_norm_weight" : input_norm_weight,
+                            "self_attn_qkv_weight" : qkv_weight[tp_rank],
+                            "self_attn_proj_weight" : dense_weight[tp_rank],
+                            "mlp_norm_weight" : post_norm_weight
+                        }
+                    else:
+                        params_dict = {
+                            "self_attn_norm_weight" : input_norm_weight,
+                            "self_attn_q_weight" : q_weight[tp_rank],
+                            "self_attn_k_weight" : k_weight[tp_rank],
+                            "self_attn_v_weight" : v_weight[tp_rank],
+                            "self_attn_proj_weight" : dense_weight[tp_rank],
+                            "mlp_norm_weight" : post_norm_weight
+                        }
                     if margs.num_experts:
                         params_dict.update({
                             "mlp_fc1_weight" : mlp_l0_weight[ep_rank][tp_rank],

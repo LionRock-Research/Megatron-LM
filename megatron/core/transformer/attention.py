@@ -49,6 +49,9 @@ class SelfAttentionSubmodules:
     """
 
     linear_qkv: Union[ModuleSpec, type] = None
+    linear_q: Union[ModuleSpec, type] = None
+    linear_k: Union[ModuleSpec, type] = None
+    linear_v: Union[ModuleSpec, type] = None
     core_attention: Union[ModuleSpec, type] = None
     linear_proj: Union[ModuleSpec, type] = None
     q_layernorm: Union[ModuleSpec, type] = None
@@ -493,19 +496,57 @@ class SelfAttention(Attention):
             attention_type="self",
             cp_comm_type=cp_comm_type,
         )
-
-        self.linear_qkv = build_module(
-            submodules.linear_qkv,
-            self.config.hidden_size,
-            self.query_projection_size + 2 * self.kv_projection_size,
-            config=self.config,
-            init_method=self.config.init_method,
-            gather_output=False,
-            bias=self.config.add_bias_linear or self.config.add_qkv_bias,
-            skip_bias_add=False,
-            is_expert=False,
-            tp_comm_buffer_name='qkv',
-        )
+        if self.config.qkv_linear_fusion:
+            self.linear_qkv = build_module(
+                submodules.linear_qkv,
+                self.config.hidden_size,
+                self.query_projection_size + 2 * self.kv_projection_size,
+                config=self.config,
+                init_method=self.config.init_method,
+                gather_output=False,
+                bias=self.config.add_bias_linear or self.config.add_qkv_bias,
+                skip_bias_add=False,
+                is_expert=False,
+                tp_comm_buffer_name='qkv',
+            )
+            self.linear_q = None
+            self.linear_k = None
+            self.linear_v = None
+        else:
+            self.linear_q = build_module(
+                submodules.linear_q,
+                self.config.hidden_size,
+                self.query_projection_size,
+                config=self.config,
+                init_method=self.config.init_method,
+                gather_output=False,
+                bias=self.config.add_bias_linear or self.config.add_qkv_bias,
+                skip_bias_add=False,
+                is_expert=False,
+            )
+            self.linear_k = build_module(
+                submodules.linear_k,
+                self.config.hidden_size,
+                self.kv_projection_size,
+                config=self.config,
+                init_method=self.config.init_method,
+                gather_output=False,
+                bias=self.config.add_bias_linear or self.config.add_qkv_bias,
+                skip_bias_add=False,
+                is_expert=False,
+            )
+            self.linear_v = build_module(
+                submodules.linear_v,
+                self.config.hidden_size,
+                self.kv_projection_size,
+                config=self.config,
+                init_method=self.config.init_method,
+                gather_output=False,
+                bias=self.config.add_bias_linear or self.config.add_qkv_bias,
+                skip_bias_add=False,
+                is_expert=False,
+            )
+            self.linear_qkv = None
 
         if submodules.q_layernorm is not None:
             self.q_layernorm = build_module(
@@ -602,43 +643,53 @@ class SelfAttention(Attention):
         """
         Derives `query`, `key` and `value` tensors from `hidden_states`.
         """
-        # Attention heads [sq, b, h] --> [sq, b, ng * (np/ng + 2) * hn)]
-        mixed_qkv, _ = self.linear_qkv(hidden_states)
+        if self.config.qkv_linear_fusion:
+            # Attention heads [sq, b, h] --> [sq, b, ng * (np/ng + 2) * hn)]
+            mixed_qkv, _ = self.linear_qkv(hidden_states)
 
-        # [sq, b, hp] --> [sq, b, ng, (np/ng + 2) * hn]
-        new_tensor_shape = mixed_qkv.size()[:-1] + (
-            self.num_query_groups_per_partition,
-            (
-                (self.num_attention_heads_per_partition // self.num_query_groups_per_partition + 2)
-                * self.hidden_size_per_attention_head
-            ),
-        )
-        mixed_qkv = mixed_qkv.view(*new_tensor_shape)
+            # [sq, b, hp] --> [sq, b, ng, (np/ng + 2) * hn]
+            new_tensor_shape = mixed_qkv.size()[:-1] + (
+                self.num_query_groups_per_partition,
+                (
+                    (self.num_attention_heads_per_partition // self.num_query_groups_per_partition + 2)
+                    * self.hidden_size_per_attention_head
+                ),
+            )
+            mixed_qkv = mixed_qkv.view(*new_tensor_shape)
 
-        split_arg_list = [
-            (
-                self.num_attention_heads_per_partition
-                // self.num_query_groups_per_partition
-                * self.hidden_size_per_attention_head
-            ),
-            self.hidden_size_per_attention_head,
-            self.hidden_size_per_attention_head,
-        ]
+            split_arg_list = [
+                (
+                    self.num_attention_heads_per_partition
+                    // self.num_query_groups_per_partition
+                    * self.hidden_size_per_attention_head
+                ),
+                self.hidden_size_per_attention_head,
+                self.hidden_size_per_attention_head,
+            ]
 
-        if SplitAlongDim is not None:
+            if SplitAlongDim is not None:
 
-            # [sq, b, ng, (np/ng + 2) * hn]
-            # --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn]
-            (query, key, value) = SplitAlongDim(mixed_qkv, 3, split_arg_list)
+                # [sq, b, ng, (np/ng + 2) * hn]
+                # --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn]
+                (query, key, value) = SplitAlongDim(mixed_qkv, 3, split_arg_list)
+            else:
+
+                # [sq, b, ng, (np/ng + 2) * hn]
+                # --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn]
+                (query, key, value) = torch.split(mixed_qkv, split_arg_list, dim=3)
+
+            # [sq, b, ng, np/ng * hn] -> [sq, b, np, hn]
+            query = query.reshape(query.size(0), query.size(1), -1, self.hidden_size_per_attention_head)
         else:
-
-            # [sq, b, ng, (np/ng + 2) * hn]
-            # --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn]
-            (query, key, value) = torch.split(mixed_qkv, split_arg_list, dim=3)
-
-        # [sq, b, ng, np/ng * hn] -> [sq, b, np, hn]
-        query = query.reshape(query.size(0), query.size(1), -1, self.hidden_size_per_attention_head)
-
+            query, _ = self.linear_q(hidden_states)
+            key, _ = self.linear_k(hidden_states)
+            value, _ = self.linear_v(hidden_states)
+        
+            query = query.reshape(query.size(0), query.size(1), -1, self.hidden_size_per_attention_head)
+            key = key.reshape(key.size(0), key.size(1), -1, self.hidden_size_per_attention_head)
+            value = value.reshape(value.size(0), value.size(1), -1, self.hidden_size_per_attention_head)
+        
+        
         if self.q_layernorm is not None:
             query = self.q_layernorm(query)
 
@@ -650,7 +701,7 @@ class SelfAttention(Attention):
 
         return query, key, value
 
-
+# TODO: may need to add q, k, v linear layers
 class CrossAttention(Attention):
     """Cross-attention layer class
 
