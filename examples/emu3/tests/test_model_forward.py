@@ -1,10 +1,10 @@
+
 import torch
 import gc
 import os
 import numpy as np
 import torch.nn.functional as F
 
-from megatron.core import parallel_state
 from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.models.gpt.gpt_model import GPTModel
@@ -12,6 +12,8 @@ from megatron.core.models.gpt.gpt_layer_specs import get_gpt_layer_with_transfor
 from megatron.training.checkpointing import _load_base_checkpoint
 from types import SimpleNamespace
 from transformers import AutoModelForCausalLM
+
+from utils import initialize_distributed, destroy_distributed
 
 QKV_LINEAR_FUSION = True
 EMU3_HF_MODEL_DIR = "/data/models/Emu3-Stage1"
@@ -84,23 +86,6 @@ def generate_hook(module, suffix, dump_input=False):
 
     return debug_hook
 
-
-def initialize_distributed(tensor_model_parallel_size=1, pipeline_model_parallel_size=1):
-    parallel_state.destroy_model_parallel()
-
-    # Torch setup for distributed training
-    rank = int(os.environ["LOCAL_RANK"])
-    world_size = torch.cuda.device_count()
-    torch.cuda.set_device(rank)
-    torch.distributed.init_process_group(world_size=world_size, rank=rank)
-
-    # Megatron core distributed training initialization
-    parallel_state.initialize_model_parallel(tensor_model_parallel_size, pipeline_model_parallel_size)
-
-
-def destroy_distributed():
-    parallel_state.destroy_model_parallel()
-    torch.distributed.destroy_process_group()
 
 def load_weights(gpt_model):
     args = SimpleNamespace(
@@ -217,6 +202,7 @@ def test_model_forward_and_backward(debug=False, deterministic_mode=False, test_
         labels_megatron[-1] = 0
         loss_megatron = F.cross_entropy(output_megatron.view(-1, 184622), labels_megatron.view(-1))
         loss_megatron.backward()
+        print(loss_megatron.item())
         
         # Store for comparison
         embed_grad_megatron = gpt_model.embedding.word_embeddings.weight.grad[0:10].clone().cpu()
@@ -279,6 +265,7 @@ def test_model_forward_and_backward(debug=False, deterministic_mode=False, test_
         # Calculate loss and run backward with same labels
         loss_hf = F.cross_entropy(output_hf.view(-1, 184622), labels_hf.view(-1))
         loss_hf.backward()
+        print(loss_hf.item())
         
         input_hf = hf_model.model.embed_tokens.weight.grad[0:10].clone().cpu()
         output_hf = output_hf.clone().detach().cpu()
@@ -297,6 +284,6 @@ if __name__ == "__main__":
     # torch.backends.cuda.matmul.allow_tf32 = True
     # run in block mode
     os.environ["NVIDIA_TF32_OVERRIDE"] = "0"
-    os.environ["NVTE_FLASH_ATTN"] = "0"
+    os.environ["NVTE_FLASH_ATTN"] = "1"
     os.environ["NVTE_FUSED_ATTN"] = "0"
-    test_model_forward_and_backward(debug=True, deterministic_mode=False, test_backward=True)
+    test_model_forward_and_backward(debug=True, deterministic_mode=True, test_backward=True)

@@ -11,8 +11,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__),
 import time
 import gzip
 import glob
-import torch
-import numpy as np
 import multiprocessing
 try:
     import nltk
@@ -382,7 +380,6 @@ def main():
             output_bin_files[key],
             dtype=indexed_dataset.DType.optimal_dtype(tokenizer.vocab_size),
         )
-
         for name in in_ss_out_names:
             parition_output_prefix = name['output_prefix']
             full_partition_output_prefix = "{}_{}_{}".format(parition_output_prefix,

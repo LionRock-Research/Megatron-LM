@@ -253,7 +253,7 @@ class _IndexReader(object):
         self.bin_buffer_mmap = numpy.memmap(idx_path, mode="r", order="C")
         self.bin_buffer = memoryview(self.bin_buffer_mmap)
 
-        log_single_rank(logger, logging.INFO, f"\tExtract the sequence lengths")
+        log_single_rank(logger, logging.INFO, "\tExtract the sequence lengths")
         t_beg = time.time()
         self.sequence_lengths = numpy.frombuffer(
             self.bin_buffer, dtype=numpy.int32, count=self.sequence_count, offset=offset
@@ -261,7 +261,7 @@ class _IndexReader(object):
         t_end = time.time()
         log_single_rank(logger, logging.DEBUG, f"\t> time elapsed: {t_end - t_beg:4f} seconds")
 
-        log_single_rank(logger, logging.INFO, f"\tExtract the sequence pointers")
+        log_single_rank(logger, logging.INFO, "\tExtract the sequence pointers")
         t_beg = time.time()
         self.sequence_pointers = numpy.frombuffer(
             self.bin_buffer,
@@ -272,7 +272,7 @@ class _IndexReader(object):
         t_end = time.time()
         log_single_rank(logger, logging.DEBUG, f"\t> time elapsed: {t_end - t_beg:4f} seconds")
 
-        log_single_rank(logger, logging.INFO, f"\tExtract the document indices")
+        log_single_rank(logger, logging.INFO, "\tExtract the document indices")
         t_beg = time.time()
         self.document_indices = numpy.frombuffer(
             self.bin_buffer,
@@ -285,7 +285,7 @@ class _IndexReader(object):
 
         self.sequence_modes = None
         if multimodal:
-            log_single_rank(logger, logging.INFO, f"\tExtract the sequence modes")
+            log_single_rank(logger, logging.INFO, "\tExtract the sequence modes")
             t_beg = time.time()
             self.sequence_modes = numpy.frombuffer(
                 self.bin_buffer,

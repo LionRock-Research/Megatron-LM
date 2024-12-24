@@ -56,7 +56,7 @@ class BlendedDataset(torch.utils.data.Dataset):
         # Alert user to unnecessary blending
         if len(datasets) == 1:
             log_single_rank(
-                logger, logging.WARNING, f"Building a BlendedDataset for a single MegatronDataset"
+                logger, logging.WARNING, "Building a BlendedDataset for a single MegatronDataset"
             )
 
         if size is not None:
@@ -132,7 +132,7 @@ class BlendedDataset(torch.utils.data.Dataset):
 
             # Build the dataset and dataset sample indexes
             log_single_rank(
-                logger, logging.INFO, f"\tBuild and save the dataset and dataset sample indexes"
+                logger, logging.INFO, "\tBuild and save the dataset and dataset sample indexes"
             )
             t_beg = time.time()
             from megatron.core.datasets import helpers

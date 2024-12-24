@@ -99,7 +99,7 @@ class BlendedMegatronDatasetConfig:
                 log_single_rank(
                     logger,
                     logging.INFO,
-                    f"Let mock = True, as both blend and blend_per_split are None",
+                    "Let mock = True, as both blend and blend_per_split are None",
                 )
                 self.split = "1,1,1"
                 log_single_rank(

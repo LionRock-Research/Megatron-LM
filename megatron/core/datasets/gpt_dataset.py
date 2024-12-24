@@ -88,9 +88,7 @@ class GPTDataset(MegatronDataset):
         index_split: Split,
         config: GPTDatasetConfig,
     ) -> None:
-        super().__init__(
-            indexed_dataset, dataset_path, indexed_indices, num_samples, index_split, config
-        )
+        super().__init__(indexed_dataset, dataset_path, indexed_indices, num_samples, index_split, config)
         self.masks_and_position_ids_are_cacheable = not any(
             [
                 self.config.reset_position_ids,
@@ -108,9 +106,7 @@ class GPTDataset(MegatronDataset):
         except Exception:
             self._pad_token_id = _PAD_TOKEN_ID
 
-        (self.document_index, self.sample_index, self.shuffle_index) = (
-            self._build_document_sample_shuffle_indices()
-        )
+        (self.document_index, self.sample_index, self.shuffle_index) = self._build_document_sample_shuffle_indices()
 
     @staticmethod
     def numel_low_level_dataset(low_level_dataset: IndexedDataset) -> int:
@@ -180,10 +176,7 @@ class GPTDataset(MegatronDataset):
             labels = torch.roll(text, shifts=-1, dims=0)
             labels[-1] = self._pad_token_id
 
-        if (
-            not self.masks_and_position_ids_are_cacheable
-            or not self.masks_and_position_ids_are_cached
-        ):
+        if not self.masks_and_position_ids_are_cacheable or not self.masks_and_position_ids_are_cached:
             attention_mask, loss_mask, position_ids = _get_ltor_masks_and_position_ids(
                 tokens,
                 self.config.tokenizer.eod,
@@ -229,9 +222,7 @@ class GPTDataset(MegatronDataset):
                 "position_ids": position_ids,
             }
 
-    def _query_document_sample_shuffle_indices(
-        self, idx: int
-    ) -> Tuple[numpy.ndarray, numpy.ndarray]:
+    def _query_document_sample_shuffle_indices(self, idx: int) -> Tuple[numpy.ndarray, numpy.ndarray]:
         """Get the text (token ids) and document ids for a given index
 
         Args:
@@ -260,9 +251,7 @@ class GPTDataset(MegatronDataset):
                 self.dataset.get(
                     self.document_index[doc_index_beg],
                     offset=doc_index_beg_offset,
-                    length=doc_index_end_offset
-                    - doc_index_beg_offset
-                    + self.config.add_extra_token_to_sequence,
+                    length=doc_index_end_offset - doc_index_beg_offset + self.config.add_extra_token_to_sequence,
                 )
             )
 
@@ -274,14 +263,8 @@ class GPTDataset(MegatronDataset):
 
                 # Add the sample part
                 offset = 0 if i > doc_index_beg else doc_index_beg_offset
-                length = (
-                    None
-                    if i < doc_index_end
-                    else doc_index_end_offset + self.config.add_extra_token_to_sequence
-                )
-                sample_parts.append(
-                    self.dataset.get(self.document_index[i], offset=offset, length=length)
-                )
+                length = None if i < doc_index_end else doc_index_end_offset + self.config.add_extra_token_to_sequence
+                sample_parts.append(self.dataset.get(self.document_index[i], offset=offset, length=length))
         assert len(document_ids) == len(
             sample_parts
         ), f"len(document_ids) ({len(document_ids)}) != len(sample_parts) ({len(sample_parts)})"
@@ -291,8 +274,7 @@ class GPTDataset(MegatronDataset):
         # Pad the sample if necessary
         if length < (self.config.sequence_length + self.config.add_extra_token_to_sequence):
             sample_parts.append(
-                [self._pad_token_id]
-                * (self.config.sequence_length + self.config.add_extra_token_to_sequence - length)
+                [self._pad_token_id] * (self.config.sequence_length + self.config.add_extra_token_to_sequence - length)
             )
 
         return (
@@ -322,9 +304,7 @@ class GPTDataset(MegatronDataset):
         """
         path_to_cache = self.config.path_to_cache
         if path_to_cache is None and not self.config.mock:
-            path_to_cache = os.path.join(
-                self.dataset.path_prefix, "cache", f"{type(self).__name__}_indices"
-            )
+            path_to_cache = os.path.join(self.dataset.path_prefix, "cache", f"{type(self).__name__}_indices")
 
         if path_to_cache:
             get_path_to = lambda suffix: os.path.join(
@@ -350,139 +330,19 @@ class GPTDataset(MegatronDataset):
             cache_hit = False
 
         if not path_to_cache or (
-            not cache_hit
-            and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0)
+            not cache_hit and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0)
         ):
-
             log_single_rank(
                 logger,
                 logging.INFO,
                 f"Build and save the {type(self).__name__} {self.index_split.name} indices",
             )
             self.built_anew_on_cache_miss = True
-            t_beg = time.time()
-
-            sequence_length = self.config.sequence_length
-            num_tokens_per_epoch = self._get_num_tokens_per_epoch()
-            num_epochs = self._get_num_epochs(num_tokens_per_epoch)
-
-            if num_epochs == 1:
-                separate_final_epoch = False
-            else:
-                # Get the number of samples for the last epoch
-                num_samples_sans_final_epoch = (
-                    (num_epochs - 1) * num_tokens_per_epoch
-                    - self.config.add_extra_token_to_sequence
-                ) // sequence_length
-                num_samples_from_final_epoch = self.num_samples - num_samples_sans_final_epoch
-                num_samples_per_epoch = (
-                    num_tokens_per_epoch - self.config.add_extra_token_to_sequence
-                ) // sequence_length
-
-                # num_samples_from_final_epoch should be non-negative
-                assert num_samples_from_final_epoch >= 0
-
-                # num_samples_from_final_epoch should not exceed max value
-                assert num_samples_from_final_epoch <= num_samples_per_epoch + 1
-
-                # Separate the final epoch if it falls below the threshold
-                threshold = 0.80
-                separate_final_epoch = num_samples_from_final_epoch < int(
-                    threshold * num_samples_per_epoch
-                )
-
-                log_single_rank(
-                    logger,
-                    logging.DEBUG,
-                    f"> num_samples_from_final_epoch: {num_samples_from_final_epoch}",
-                )
-                log_single_rank(logger, logging.DEBUG, f"> threshold: {threshold}")
-                log_single_rank(
-                    logger, logging.DEBUG, f"> num_samples_per_epoch: {num_samples_per_epoch}"
-                )
-
-            log_single_rank(
-                logger, logging.DEBUG, f"> separate_final_epoch: {separate_final_epoch}"
+            return self._build_document_sample_shuffle_indices_helper(
+                path_to_cache, path_to_description, path_to_document_index, path_to_sample_index, path_to_shuffle_index
             )
 
-            numpy_random_state = numpy.random.RandomState(self.config.random_seed)
-
-            # Build the document index
-            document_index = _build_document_index(
-                self.indices, num_epochs, numpy_random_state, separate_final_epoch
-            )
-
-            drop_last_partial_sequence = True
-            if self.index_split == Split.valid:
-                drop_last_partial_sequence = self.config.drop_last_partial_validation_sequence
-
-            # Build the sample index
-            from megatron.core.datasets import helpers
-
-            if self.index_split == Split.valid:
-                drop_last_partial_sequence = self.config.drop_last_partial_validation_sequence
-            else:
-                drop_last_partial_sequence = True
-
-            assert document_index.dtype == numpy.int32
-            assert self.dataset.sequence_lengths.dtype == numpy.int32
-            if len(document_index) * 2 > len(self.dataset.sequence_lengths):
-                # Heuristic: if "access density" of sequence_lengths is relatively high,
-                # force loading the mmap-ed array into memory by taking a copy.
-                # System performance benefits come from two aspects:
-                # 1. **sequentially** pre-loading the whole file if we're gonna read a large fraction anyways.
-                # 2. GIL is held when calling into c++ code; making the c++ func faster improves parallelism.
-                sequence_lengths_for_cpp = self.dataset.sequence_lengths.copy()
-            else:
-                sequence_lengths_for_cpp = self.dataset.sequence_lengths
-            sample_index = helpers.build_sample_idx(
-                sequence_lengths_for_cpp,
-                document_index,
-                sequence_length,
-                num_epochs,
-                num_tokens_per_epoch,
-                drop_last_partial_sequence,
-                self.config.add_extra_token_to_sequence,
-            )
-
-            # Build the shuffle index
-            if separate_final_epoch:
-                shuffle_index = _build_shuffle_index(
-                    num_samples_sans_final_epoch, sample_index.shape[0] - 1, numpy_random_state
-                )
-            else:
-                shuffle_index = _build_shuffle_index(
-                    sample_index.shape[0] - 1, sample_index.shape[0] - 1, numpy_random_state
-                )
-
-            if path_to_cache:
-                os.makedirs(path_to_cache, exist_ok=True)
-                # Write the description
-                with open(path_to_description, "wt") as writer:
-                    writer.write(self.unique_description)
-                numpy.save(path_to_document_index, document_index, allow_pickle=True)
-                numpy.save(path_to_sample_index, sample_index, allow_pickle=True)
-                numpy.save(path_to_shuffle_index, shuffle_index, allow_pickle=True)
-            else:
-                log_single_rank(
-                    logger,
-                    logging.WARNING,
-                    f"Unable to save the {type(self).__name__} indexes because path_to_cache is None",
-                )
-
-            t_end = time.time()
-            log_single_rank(logger, logging.DEBUG, f"\t> time elapsed: {t_end - t_beg:4f} seconds")
-
-            log_single_rank(
-                logger, logging.INFO, f"> total number of samples: {sample_index.shape[0] - 1}"
-            )
-            log_single_rank(logger, logging.INFO, f"> total number of epochs: {num_epochs}")
-
-            return document_index, sample_index, shuffle_index
-
-        log_single_rank(
-            logger, logging.INFO, f"Load the {type(self).__name__} {self.index_split.name} indices"
-        )
+        log_single_rank(logger, logging.INFO, f"Load the {type(self).__name__} {self.index_split.name} indices")
 
         log_single_rank(
             logger,
@@ -490,7 +350,7 @@ class GPTDataset(MegatronDataset):
             f"\tLoad the document index from {os.path.basename(path_to_document_index)}",
         )
         t_beg = time.time()
-        document_index = numpy.load(path_to_document_index, allow_pickle=True, mmap_mode='r')
+        document_index = numpy.load(path_to_document_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
         log_single_rank(logger, logging.DEBUG, f"\t> time elapsed: {t_end - t_beg:4f} seconds")
 
@@ -500,7 +360,7 @@ class GPTDataset(MegatronDataset):
             f"\tLoad the sample index from {os.path.basename(path_to_sample_index)}",
         )
         t_beg = time.time()
-        sample_index = numpy.load(path_to_sample_index, allow_pickle=True, mmap_mode='r')
+        sample_index = numpy.load(path_to_sample_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
         log_single_rank(logger, logging.DEBUG, f"\t> time elapsed: {t_end - t_beg:4f} seconds")
 
@@ -510,29 +370,146 @@ class GPTDataset(MegatronDataset):
             f"\tLoad the shuffle index from {os.path.basename(path_to_shuffle_index)}",
         )
         t_beg = time.time()
-        shuffle_index = numpy.load(path_to_shuffle_index, allow_pickle=True, mmap_mode='r')
+        shuffle_index = numpy.load(path_to_shuffle_index, allow_pickle=True, mmap_mode="r")
         t_end = time.time()
         log_single_rank(logger, logging.DEBUG, f"\t> time elapsed: {t_end - t_beg:4f} seconds")
 
-        log_single_rank(
-            logger, logging.INFO, f"> total number of samples: {sample_index.shape[0] - 1}"
-        )
+        log_single_rank(logger, logging.INFO, f"> total number of samples: {sample_index.shape[0] - 1}")
 
         return document_index, sample_index, shuffle_index
 
-    def _get_num_tokens_per_epoch(self) -> int:
-        """Calculate the number of tokens in a single epoch
+    def _build_document_sample_shuffle_indices_helper(
+        self, path_to_cache, path_to_description, path_to_document_index, path_to_sample_index, path_to_shuffle_index
+    ) -> Tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]:
+        """Build and save the document index, sample index, and shuffle index
+
+        Args:
+            path_to_cache (str): The path to the cache
+
+            path_to_description (str): The path to the description
+
+            path_to_document_index (str): The path to the document index
+
+            path_to_sample_index (str): The path to the sample index
+
+            path_to_shuffle_index (str): The path to the shuffle index
+        """
+        t_beg = time.time()
+
+        sequence_length = self.config.sequence_length
+        num_tokens_per_epoch = self._get_tokens_per_epoch()
+        num_epochs = self._get_num_epochs(num_tokens_per_epoch)
+
+        if num_epochs == 1:
+            separate_final_epoch = False
+        else:
+            # Get the number of samples for the last epoch
+            num_samples_sans_final_epoch = (
+                (num_epochs - 1) * num_tokens_per_epoch - self.config.add_extra_token_to_sequence
+            ) // sequence_length
+            num_samples_from_final_epoch = self.num_samples - num_samples_sans_final_epoch
+            num_samples_per_epoch = (num_tokens_per_epoch - self.config.add_extra_token_to_sequence) // sequence_length
+
+            # num_samples_from_final_epoch should be non-negative
+            assert num_samples_from_final_epoch >= 0
+
+            # num_samples_from_final_epoch should not exceed max value
+            assert num_samples_from_final_epoch <= num_samples_per_epoch + 1
+
+            # Separate the final epoch if it falls below the threshold
+            threshold = 0.80
+            separate_final_epoch = num_samples_from_final_epoch < int(threshold * num_samples_per_epoch)
+
+            log_single_rank(
+                logger,
+                logging.DEBUG,
+                f"> num_samples_from_final_epoch: {num_samples_from_final_epoch}",
+            )
+            log_single_rank(logger, logging.DEBUG, f"> threshold: {threshold}")
+            log_single_rank(logger, logging.DEBUG, f"> num_samples_per_epoch: {num_samples_per_epoch}")
+
+        log_single_rank(logger, logging.DEBUG, f"> separate_final_epoch: {separate_final_epoch}")
+
+        numpy_random_state = numpy.random.RandomState(self.config.random_seed)
+
+        # Build the document index
+        document_index = _build_document_index(self.indices, num_epochs, numpy_random_state, separate_final_epoch)
+
+        drop_last_partial_sequence = True
+        if self.index_split == Split.valid:
+            drop_last_partial_sequence = self.config.drop_last_partial_validation_sequence
+
+            # Build the sample index
+        from megatron.core.datasets import helpers
+
+        if self.index_split == Split.valid:
+            drop_last_partial_sequence = self.config.drop_last_partial_validation_sequence
+        else:
+            drop_last_partial_sequence = True
+
+        assert document_index.dtype == numpy.int32
+        assert self.dataset.sequence_lengths.dtype == numpy.int32
+        if len(document_index) * 2 > len(self.dataset.sequence_lengths):
+            # Heuristic: if "access density" of sequence_lengths is relatively high,
+            # force loading the mmap-ed array into memory by taking a copy.
+            # System performance benefits come from two aspects:
+            # 1. **sequentially** pre-loading the whole file if we're gonna read a large fraction anyways.
+            # 2. GIL is held when calling into c++ code; making the c++ func faster improves parallelism.
+            sequence_lengths_for_cpp = self.dataset.sequence_lengths.copy()
+        else:
+            sequence_lengths_for_cpp = self.dataset.sequence_lengths
+        sample_index = helpers.build_sample_idx(
+            sequence_lengths_for_cpp,
+            document_index,
+            sequence_length,
+            num_epochs,
+            num_tokens_per_epoch,
+            drop_last_partial_sequence,
+            self.config.add_extra_token_to_sequence,
+        )
+
+        # Build the shuffle index
+        if separate_final_epoch:
+            shuffle_index = _build_shuffle_index(
+                num_samples_sans_final_epoch, sample_index.shape[0] - 1, numpy_random_state
+            )
+        else:
+            shuffle_index = _build_shuffle_index(
+                sample_index.shape[0] - 1, sample_index.shape[0] - 1, numpy_random_state
+            )
+
+        if path_to_cache:
+            os.makedirs(path_to_cache, exist_ok=True)
+            # Write the description
+            with open(path_to_description, "wt") as writer:
+                writer.write(self.unique_description)
+            numpy.save(path_to_document_index, document_index, allow_pickle=True)
+            numpy.save(path_to_sample_index, sample_index, allow_pickle=True)
+            numpy.save(path_to_shuffle_index, shuffle_index, allow_pickle=True)
+        else:
+            log_single_rank(
+                logger,
+                logging.WARNING,
+                f"Unable to save the {type(self).__name__} indexes because path_to_cache is None",
+            )
+
+        t_end = time.time()
+        log_single_rank(logger, logging.DEBUG, f"\t> time elapsed: {t_end - t_beg:4f} seconds")
+
+        log_single_rank(logger, logging.INFO, f"> total number of samples: {sample_index.shape[0] - 1}")
+        log_single_rank(logger, logging.INFO, f"> total number of epochs: {num_epochs}")
+        return document_index, sample_index, shuffle_index
+
+    def _get_tokens_per_epoch(self) -> int:
+        """Get the number of tokens per epoch
 
         Returns:
-            int: The number of tokens in a single epoch
+            int: The number of tokens per epoch
         """
         return int(numpy.sum(self.dataset.sequence_lengths[self.indices]))
 
-    def _get_num_epochs(self, num_tokens_per_epoch: int) -> int:
+    def _get_num_epochs(self, num_tokens_per_epoch: int) -> Tuple[int, int]:
         """Calculate the number of epochs
-
-        Args:
-            num_tokens_per_epoch (int): The number of tokens in a single epoch
 
         Returns:
             int: The number of epochs
@@ -647,9 +624,7 @@ def _get_ltor_masks_and_position_ids(
     seq_length = data.numel()
 
     if create_attention_mask:
-        attention_mask = torch.tril(
-            torch.ones((seq_length, seq_length), device=data.device)
-        ).unsqueeze(0)
+        attention_mask = torch.tril(torch.ones((seq_length, seq_length), device=data.device)).unsqueeze(0)
     else:
         attention_mask = None
 
@@ -691,7 +666,6 @@ def _get_ltor_masks_and_position_ids(
 
 
 class MockGPTLowLevelDataset:
-
     seed: int = 0
     size: int = 100000
     max_sequence_length: int = 100
@@ -699,18 +673,14 @@ class MockGPTLowLevelDataset:
     def __init__(self, tokenizer: MegatronTokenizer) -> None:
         self.tokenizer = tokenizer
         rng = numpy.random.default_rng(seed=self.seed)
-        self.sequence_lengths = rng.integers(
-            low=1, high=self.max_sequence_length, size=self.size, dtype=numpy.int32
-        )
+        self.sequence_lengths = rng.integers(low=1, high=self.max_sequence_length, size=self.size, dtype=numpy.int32)
 
     def __len__(self) -> int:
         return self.size
 
     def __getitem__(self, idx: int) -> numpy.number:
         length = self.sequence_lengths[idx]
-        sample = numpy.int64(
-            numpy.concatenate([numpy.arange(length - 1) + 1, [self.tokenizer.eod]])
-        )
+        sample = numpy.int64(numpy.concatenate([numpy.arange(length - 1) + 1, [self.tokenizer.eod]]))
         return sample
 
     def get(self, idx: int, offset: int = 0, length: Optional[int] = None) -> numpy.ndarray:
@@ -762,9 +732,7 @@ class MockGPTDataset(GPTDataset):
         return len(low_level_dataset)
 
     @staticmethod
-    def build_low_level_dataset(
-        dataset_path: Optional[str], config: GPTDatasetConfig
-    ) -> MockGPTLowLevelDataset:
+    def build_low_level_dataset(dataset_path: Optional[str], config: GPTDatasetConfig) -> MockGPTLowLevelDataset:
         """Abstract method implementation
 
         Args:

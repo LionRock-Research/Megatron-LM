@@ -53,7 +53,7 @@ class BlendedMegatronDatasetBuilder(object):
 
         log_single_rank(
             logger,
-            logging.INFO,
+            logging.WARNING,
             f"Building dataset splits with cls={cls.__name__}, sizes={self.sizes}, and config={self.config}",
         )
 
@@ -417,7 +417,10 @@ class BlendedMegatronDatasetBuilder(object):
         low_level_dataset = self.cls.build_low_level_dataset(dataset_path, self.config)
 
         # Build the split indices for the low level dataset
-        num_elements = self.cls.numel_low_level_dataset(low_level_dataset)
+        if isinstance(low_level_dataset, list):
+            num_elements = self.cls.numel_low_level_dataset(low_level_dataset[0])
+        else:
+            num_elements = self.cls.numel_low_level_dataset(low_level_dataset)
         split_indices = []
         for i, _ in enumerate(Split):
             if split[i] is not None:
@@ -485,10 +488,10 @@ class BlendedMegatronDatasetBuilder(object):
                     dataset = cls(*args)
                 except OSError as err:
                     log = (
-                        f"Failed to write dataset materials to the data cache directory. "
-                        + f"Please supply a directory to which you have write access via "
-                        + f"the path_to_cache attribute in BlendedMegatronDatasetConfig and "
-                        + f"retry. Refer to the preserved traceback above for more information."
+                        "Failed to write dataset materials to the data cache directory. "
+                        + "Please supply a directory to which you have write access via "
+                        + "the path_to_cache attribute in BlendedMegatronDatasetConfig and "
+                        + "retry. Refer to the preserved traceback above for more information."
                     )
                     raise Exception(log) from err
 
